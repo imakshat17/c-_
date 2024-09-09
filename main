@@ -108,8 +108,7 @@ public:
                     cerr << "Error opening file: " << filePath << endl;
                     continue;
                 }
-                  // escape the first line
-                  // escape the first line
+                
                 string line;
                 getline(file, line);
 
