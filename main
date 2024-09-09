@@ -1,0 +1,147 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <sstream>
+#include <vector>
+#include <dirent.h>
+#include <sys/types.h>
+#include <cstring>
+#include <map>
+
+using namespace std;
+
+enum ORDER {
+    NEW = 2073,
+    MOD = 2074,
+    CXL = 2075,
+    TRD = 2222
+};
+
+enum INDEX_ID {
+    TAG = 1,
+    TCODE = 2,
+    TOKEN = 11
+};
+
+struct OrderDetails {
+    int newOrderCount = 0;
+    int modCount = 0;
+    int cxlCount = 0;
+    int trdCount = 0;
+
+string ToString() const {
+        stringstream ss;
+        double OTR = (trdCount != 0) ? static_cast<double>(modCount) / trdCount : static_cast<double>(modCount) / 1;
+        ss << newOrderCount << "|" << modCount << "|" << cxlCount << "|" << trdCount << "|" << OTR;
+        return ss.str();
+    }
+};
+
+struct DataStructure {
+    map<int, OrderDetails> orderDetailsMap;
+
+    void AddDetails(int key, int ordTcode) {
+         if (key == -1) {
+            return;
+        }
+
+        if (orderDetailsMap.find(key) == orderDetailsMap.end()) {
+            orderDetailsMap[key] = OrderDetails();
+        }
+
+        switch (ordTcode) {
+            case NEW:
+                orderDetailsMap[key].newOrderCount++;
+                break;
+            case MOD:
+                orderDetailsMap[key].modCount++;
+                break;
+            case CXL:
+                orderDetailsMap[key].cxlCount++;
+                break;
+            case TRD:
+                orderDetailsMap[key].trdCount++;
+                break;
+        }
+    }
+};
+
+class OTR {
+private:
+    DataStructure structObj;
+
+public:
+    void ReadLine(const string& line) {
+        istringstream stream(line);
+        string segment;
+        vector<string> fields;
+
+        while (getline(stream, segment, '|')) {
+            fields.push_back(segment);
+        }
+
+        if (fields.size() > TOKEN) {
+            int key = stoi(fields[TOKEN]);
+            int tCode = stoi(fields[TCODE]);
+
+
+            structObj.AddDetails(key, tCode);
+        }
+    }
+
+    void ReadDirectory(const string& folderPath) {
+        DIR* dir;
+        struct dirent* ent;
+
+        if ((dir = opendir(folderPath.c_str())) != nullptr) {
+            while ((ent = readdir(dir)) != nullptr) {
+                string fileName = ent->d_name;
+
+                if (fileName == "." || fileName == "..") {
+                    continue;
+                }
+
+                string filePath = folderPath + "/" + fileName;
+                ifstream file(filePath);
+                if (!file.is_open()) {
+                    cerr << "Error opening file: " << filePath << endl;
+                    continue;
+                }
+                  // escape the first line
+                  // escape the first line
+                string line;
+                getline(file, line);
+
+                while (getline(file, line)) {
+                    ReadLine(line);
+                }
+
+                file.close();
+            }
+            closedir(dir);
+        } else {
+            cerr << "Could not open directory: " << folderPath << endl;
+        }
+    }
+
+    void WriteReportFile(const string& outputFilePath) {
+        ofstream outFile(outputFilePath);
+        if (!outFile.is_open()) {
+            cerr << "Error opening output file!" << endl;
+            return;
+        }
+
+        for (const auto& pair : structObj.orderDetailsMap) {
+            outFile << pair.first << "," << pair.second.ToString() << endl;
+        }
+    }
+};
+
+int main() {
+    OTR processor;
+    processor.ReadDirectory("inputfolder");
+    processor.WriteReportFile("outputfile");
+
+    return 0;
+}
