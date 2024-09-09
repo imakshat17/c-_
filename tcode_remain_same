@@ -1,0 +1,168 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <sstream>
+#include <vector>
+#include <dirent.h>
+#include <sys/types.h>
+#include <cstring>
+#include <map>
+
+using namespace std;
+
+// Enum for different order types (Transaction codes)
+enum ORDER {
+    NEW = 2073,
+    MOD = 2074,
+    CXL = 2075,
+    TRD = 2222
+};
+
+// Enum for token and transaction code indices
+enum INDEX_ID {
+    TCODE = 2,
+    TOKEN_1 = 11,  // Token index for order files
+    TOKEN_2 = 23   // Token index for trade files
+};
+
+// Struct to store counts of various order actions
+struct OrderDetails {
+    int newOrderCount = 0;
+    int modCount = 0;
+    int cxlCount = 0;
+    int trdCount = 0;
+
+    // Function to output the stored details as a string
+    string ToString() const {
+        stringstream ss;
+        double OTR = (trdCount != 0) ? static_cast<double>(modCount) / trdCount : static_cast<double>(modCount) / 1;
+        ss << newOrderCount << "|" << modCount << "|" << cxlCount << "|" << trdCount << "|" << OTR;
+        return ss.str();
+    }
+};
+
+// Struct to manage the collection of order details
+struct DataStructure {
+    map<int, OrderDetails> orderDetailsMap;
+
+    // Function to add order details based on key and transaction code
+    void AddDetails(int key, int ordTcode) {
+
+        if (key == -1) {
+            return;
+        }
+
+        if (orderDetailsMap.find(key) == orderDetailsMap.end()) {
+            orderDetailsMap[key] = OrderDetails();
+        }
+
+        switch (ordTcode) {
+            case NEW:
+                orderDetailsMap[key].newOrderCount++;
+                break;
+            case MOD:
+                orderDetailsMap[key].modCount++;
+                break;
+            case CXL:
+                orderDetailsMap[key].cxlCount++;
+                break;
+            case TRD:
+                orderDetailsMap[key].trdCount++;
+                break;
+        }
+    }
+};
+
+// Class to process and manage OTR data
+class OTR {
+private:
+    DataStructure structObj;
+
+public:
+    // Function to process a single line from the file
+    void ReadLine(string& line) {
+        istringstream stream(line);
+        string segment;
+        vector<string> fields;
+
+        while (getline(stream, segment, '|')) {
+            fields.push_back(segment);
+        }
+
+        if (fields.size() > max(TOKEN_1, TOKEN_2)) {
+            int key;
+            int tCode = stoi(fields[TCODE]);   // Transaction code remains constant
+
+
+            if (tCode == TRD) {
+                key = stoi(fields[TOKEN_2]);
+            } else {
+                key = stoi(fields[TOKEN_1]);
+            }
+
+            structObj.AddDetails(key, tCode);
+        }
+    }
+
+    // Function to process a single file
+    void ProcessFile(const string& filePath) {
+        ifstream file(filePath);
+        if (!file.is_open()) {
+            cerr << "Error opening file: " << filePath << endl;
+            return;
+        }
+
+        string line;
+        getline(file, line);  // Skip the header line
+
+        while (getline(file, line)) {
+            ReadLine(line);
+        }
+
+        file.close();
+    }
+
+    // Function to process all files in a directory
+    void ReadDirectory(const string& folderPath) {
+        DIR* dir;
+        struct dirent* ent;
+
+        if ((dir = opendir(folderPath.c_str())) != nullptr) {
+            while ((ent = readdir(dir)) != nullptr) {
+                string fileName = ent->d_name;
+
+                if (fileName == "." || fileName == "..") {
+                    continue;
+                }
+
+                string filePath = folderPath + "/" + fileName;
+                ProcessFile(filePath);  // Process each file
+            }
+            closedir(dir);
+        } else {
+            cerr << "Could not open directory: " << folderPath << endl;
+        }
+    }
+
+    // Function to write the collected report data to a file
+    void WriteReportFile(const string& outputFilePath) {
+        ofstream outFile(outputFilePath);
+        if (!outFile.is_open()) {
+            cerr << "Error opening output file!" << endl;
+            return;
+        }
+
+        for (const auto& pair : structObj.orderDetailsMap) {
+            outFile << pair.first << "," << pair.second.ToString() << endl;
+        }
+    }
+};
+
+int main() {
+    OTR processor;
+    processor.ReadDirectory("Logs");  // Input folder where files are located
+    processor.WriteReportFile("outputfile"); // Output file to store report
+
+    return 0;
+}
