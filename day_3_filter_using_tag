@@ -1,0 +1,213 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <sstream>
+#include <vector>
+#include <dirent.h>
+#include <sys/types.h>
+#include <cstring>
+#include <map>
+
+using namespace std;
+
+// Enum for different order types (Transaction codes)
+enum ORDER {
+    NEW = 2073,
+    MOD = 2074,
+    CXL = 2075,
+    TRD = 2222
+};
+
+// Enum for indices and offsets
+enum INDEX_ID {
+    TCODE = 2,
+    TAG = 4,      // Assuming 'Tag' is at index 4
+    TOKEN_1 = 11, // Token index for order files
+    TOKEN_2 = 23, // Token index for trade files
+    CLIENT_OFFSET = 111  // Client offset
+};
+
+struct OrderDetails {
+    int newOrderCount = 0;
+    int modCount = 0;
+    int cxlCount = 0;
+    int trdCount = 0;
+
+    string ToString() const {
+        stringstream ss;
+        double OTR = (trdCount != 0) ? static_cast<double>(modCount) / trdCount : static_cast<double>(modCount) / 1;
+        ss << newOrderCount << "|" << modCount << "|" << cxlCount << "|" << trdCount << "|" << OTR;
+        return ss.str();
+    }
+};
+
+// ClientWise struct for tracking details per client
+struct ClientWise {
+    int clientID;
+    map<int, OrderDetails> instrumentWise;
+    OrderDetails totalOrderDetails;
+
+    void AddDetails(int instrumentKey, int ordTcode) {
+        if (instrumentWise.find(instrumentKey) == instrumentWise.end()) {
+            instrumentWise[instrumentKey] = OrderDetails();
+        }
+
+        switch (ordTcode) {
+            case NEW:
+                instrumentWise[instrumentKey].newOrderCount++;
+                totalOrderDetails.newOrderCount++;
+                break;
+            case MOD:
+                instrumentWise[instrumentKey].modCount++;
+                totalOrderDetails.modCount++;
+                break;
+            case CXL:
+                instrumentWise[instrumentKey].cxlCount++;
+                totalOrderDetails.cxlCount++;
+                break;
+            case TRD:
+                instrumentWise[instrumentKey].trdCount++;
+                totalOrderDetails.trdCount++;
+                break;
+        }
+    }
+};
+
+struct DataStructure {
+    ClientWise clientWiseStatus[20]; // Array to store client-wise statuses
+  //  map<int, OrderDetails> orderDetailsMap; // Instrument-wise tracking
+
+    // Method to add details per client and per instrument
+    void AddDetails(int clientIndex,int tag, int instrumentKey, int ordTcode) {
+        if (clientIndex < 0 || clientIndex >= 20) {
+            cerr << "Invalid client index: " << clientIndex << endl;
+            return;
+        }
+        clientWiseStatus[clientIndex].clientID=tag;
+        clientWiseStatus[clientIndex].AddDetails(instrumentKey, ordTcode);
+    }
+};
+
+// Class to process and manage OTR data
+class OTR {
+private:
+    DataStructure structObj;
+
+public:
+    // Function to process a single line from the file
+// Function to process a single line from the file
+void ReadLine(string& line) {
+    istringstream stream(line);
+    string segment;
+    vector<string> fields;
+
+    while (getline(stream, segment, '|')) {
+        fields.push_back(segment);
+    }
+
+    if (fields.size() > max(TOKEN_1, TOKEN_2)) {
+        int tCode = stoi(fields[TCODE]);   // Transaction code
+
+        // Extract the first three digits as Tag from the corresponding field
+        string tagStr = fields[TAG].substr(0, 3);
+       // int clientID;  // Get the first three characters
+        int tag = stoi(tagStr);                    // Convert the extracted string to an integer
+
+        // Calculate client index
+        int clientIndex;
+        if(tag==0){
+              return ;
+        }
+        clientIndex=tag-CLIENT_OFFSET;
+        // tag==0? return ; :  clientIndex = tag - CLIENT_OFFSET;
+         // Using CLIENT_OFFSET from the enum
+
+        int instrumentKey;
+        if (tCode == TRD) {
+            instrumentKey = stoi(fields[TOKEN_2]); // Use token position for trade files
+        } else {
+            instrumentKey = stoi(fields[TOKEN_1]); // Use token position for order files
+        }
+
+        structObj.AddDetails(clientIndex,tag, instrumentKey, tCode);
+    }
+}
+
+
+    // Process an entire file
+    void ProcessFile(const string& filePath) {
+        ifstream file(filePath);
+        if (!file.is_open()) {
+            cerr << "Error opening file: " << filePath << endl;
+            return;
+        }
+
+        string line;
+        getline(file, line);  // Skip the header
+
+        while (getline(file, line)) {
+            ReadLine(line);
+        }
+
+        file.close();
+    }
+
+    // Read all files from a directory
+    void ReadDirectory(const string& folderPath) {
+        DIR* dir;
+        struct dirent* ent;
+
+        if ((dir = opendir(folderPath.c_str())) != nullptr) {
+            while ((ent = readdir(dir)) != nullptr) {
+                string fileName = ent->d_name;
+
+                if (fileName == "." || fileName == "..") {
+                    continue;
+                }
+
+                string filePath = folderPath + "/" + fileName;
+                ProcessFile(filePath);  // Process each file
+            }
+            closedir(dir);
+        } else {
+            cerr << "Could not open directory: " << folderPath << endl;
+        }
+    }
+
+    // Write the report file with client-wise and instrument-wise details
+   void WriteReportFiles( string& outputFolderPath) {
+        for (int i = 0; i < 20; ++i) {
+            const ClientWise& client = structObj.clientWiseStatus[i];
+            for (const auto& pair : client.instrumentWise) {
+                int instrumentKey = pair.first;
+                const OrderDetails& details = pair.second;
+
+                // Create a file name for the specific instrument key
+                string filePath = outputFolderPath + "/instrument_" + to_string(instrumentKey) + ".txt";
+                ofstream outFile(filePath);
+
+                if (!outFile.is_open()) {
+                    cerr << "Error opening output file: " << filePath << endl;
+                    continue;
+                }
+
+                // Write details to the file
+                outFile << "Client ID: " << client.clientID << endl;
+                outFile << "Instrument Key: " << instrumentKey << endl;
+                outFile << "Order Details: " << details.ToString() << endl;
+
+                outFile.close();
+            }
+        }
+    }
+};
+
+int main() {
+    OTR processor;
+    processor.ReadDirectory("Logs");
+    string outputFolderPath = "outputFiles";
+    processor.WriteReportFiles(outputFolderPath);
+
+    return 0;
+}
