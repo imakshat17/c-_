@@ -1,0 +1,343 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <sstream>
+#include <vector>
+#include <dirent.h>
+#include <sys/types.h>
+#include <map>
+#include <algorithm>
+#include <cctype>
+
+using namespace std;
+
+// Enum for different order types (Transaction codes)
+enum ORDER {
+    NEW = 2073,
+    MOD = 2074,
+    CXL = 2075,
+    TRD = 2222
+};
+
+// Enum for indices and offsets
+enum INDEX_ID {
+    TCODE = 2,
+    TAG = 4,      // Assuming 'Tag' is at index 4
+    TOKEN_1 = 11, // Token index for order files
+    TOKEN_2 = 23, // Token index for trade files
+    CLIENT_OFFSET = 111, // Client offset
+    TRADE_ACCOUNT_INDEX = 9,   // Trade account index
+    ORDER_ACCOUNT_INDEX = 15    // Order file account index
+};
+
+struct OrderDetails {
+    int newOrderCount = 0;
+    int modCount = 0;
+    int cxlCount = 0;
+    int trdCount = 0;
+
+    string ToString() const {
+        stringstream ss;
+        double OTR = (trdCount != 0) ? static_cast<double>(modCount) / trdCount : static_cast<double>(modCount) / 1;
+        ss << newOrderCount << "," << modCount << "," << cxlCount << "," << trdCount << "," << OTR;
+        return ss.str();
+    }
+};
+
+// ClientWise struct for tracking details per client
+struct ClientWise {
+    int clientID = 0;
+    map<int, OrderDetails> instrumentWise;
+    OrderDetails totalOrderDetails;
+
+    void AddDetails(int instrumentKey, int ordTcode) {
+        if (instrumentWise.find(instrumentKey) == instrumentWise.end()) {
+            instrumentWise[instrumentKey] = OrderDetails();
+        }
+
+        switch (ordTcode) {
+            case NEW:
+                instrumentWise[instrumentKey].newOrderCount++;
+                totalOrderDetails.newOrderCount++;
+                break;
+            case MOD:
+                instrumentWise[instrumentKey].modCount++;
+                totalOrderDetails.modCount++;
+                break;
+            case CXL:
+                instrumentWise[instrumentKey].cxlCount++;
+                totalOrderDetails.cxlCount++;
+                break;
+            case TRD:
+                instrumentWise[instrumentKey].trdCount++;
+                totalOrderDetails.trdCount++;
+                break;
+        }
+    }
+};
+
+// Accountwise struct for tracking details per account
+struct Accountwise {
+    string accountNumber;
+    map<int, OrderDetails> instrumentWise;
+    OrderDetails totalOrderDetails;
+
+    void AddDetails(int instrumentKey, int ordTcode) {
+        if (instrumentWise.find(instrumentKey) == instrumentWise.end()) {
+            instrumentWise[instrumentKey] = OrderDetails();
+        }
+
+        switch (ordTcode) {
+            case NEW:
+                instrumentWise[instrumentKey].newOrderCount++;
+                totalOrderDetails.newOrderCount++;
+                break;
+            case MOD:
+                instrumentWise[instrumentKey].modCount++;
+                totalOrderDetails.modCount++;
+                break;
+            case CXL:
+                instrumentWise[instrumentKey].cxlCount++;
+                totalOrderDetails.cxlCount++;
+                break;
+            case TRD:
+                instrumentWise[instrumentKey].trdCount++;
+                totalOrderDetails.trdCount++;
+                break;
+        }
+    }
+};
+
+struct DataStructure {
+    ClientWise clientWiseStatus[20]; // Array to store client-wise statuses
+    map<string, Accountwise> accountwise; // Map for account-wise tracking
+
+    // Method to add details per client and per instrument
+    void AddDetails(int clientIndex, const string& accountKey, int tag, int instrumentKey, int ordTcode) {
+        if (clientIndex < 0 || clientIndex >= 20) {
+            cerr << "Invalid client index: " << clientIndex << endl;
+            return;
+        }
+        clientWiseStatus[clientIndex].clientID = tag;
+        clientWiseStatus[clientIndex].AddDetails(instrumentKey, ordTcode);
+
+        if (accountwise.find(accountKey) == accountwise.end()) {
+            accountwise[accountKey] = Accountwise();
+            accountwise[accountKey].accountNumber = accountKey;
+        }
+        accountwise[accountKey].AddDetails(instrumentKey, ordTcode);
+    }
+};
+
+// Class to process and manage OTR data
+class OTR {
+private:
+    DataStructure structObj;
+
+    // Helper function to trim whitespace from a string
+    string TrimWhitespace(const string& str) {
+        string trimmedStr = str;
+        trimmedStr.erase(trimmedStr.begin(), find_if(trimmedStr.begin(), trimmedStr.end(), [](unsigned char ch) {
+            return !isspace(ch);
+        }));
+        trimmedStr.erase(find_if(trimmedStr.rbegin(), trimmedStr.rend(), [](unsigned char ch) {
+            return !isspace(ch);
+        }).base(), trimmedStr.end());
+        return trimmedStr;
+    }
+
+    // Helper function to safely convert string to integer
+    int SafeStoi(const string& str) {
+        string trimmedStr = TrimWhitespace(str);
+
+        if (trimmedStr.empty()) {
+            return -1; // Return an invalid number to indicate failure
+        }
+
+        try {
+            size_t pos;
+            int result = stoi(trimmedStr, &pos);
+            if (pos < trimmedStr.length()) {
+                return -1; // Return an invalid number to indicate failure
+            }
+            return result;
+        } catch (const invalid_argument&) {
+            return -1; // Return an invalid number to indicate failure
+        } catch (const out_of_range&) {
+            return -1; // Return an invalid number to indicate failure
+        }
+    }
+
+public:
+    // Function to process a single line from the file
+    void ReadLine(string& line) {
+        istringstream stream(line);
+        string segment;
+        vector<string> fields;
+
+        while (getline(stream, segment, '|')) {
+            fields.push_back(segment);
+        }
+
+        if (fields.size() > max(TOKEN_1, TOKEN_2)) {
+            int tCode = SafeStoi(fields[TCODE]);   // Transaction code
+            if (tCode == -1) return; // Skip processing if transaction code conversion failed
+
+            // Extract the first three digits as Tag from the corresponding field
+            string tagStr = fields[TAG].substr(0, 3);
+            int tag = SafeStoi(tagStr); // Convert the extracted string to an integer
+            if (tag == -1) return; // Skip processing if tag conversion failed
+
+            int clientIndex = tag - CLIENT_OFFSET; // Calculate client index
+
+            int instrumentKey;
+            string accountKey;
+
+            if (tCode == TRD) {
+                instrumentKey = SafeStoi(fields[TOKEN_2]); // Use token position for trade files
+                accountKey = TrimWhitespace(fields[TRADE_ACCOUNT_INDEX]);
+            } else {
+                instrumentKey = SafeStoi(fields[TOKEN_1]); // Use token position for order files
+                accountKey = TrimWhitespace(fields[ORDER_ACCOUNT_INDEX]);
+            }
+
+            if (instrumentKey == -1 || accountKey.empty() || accountKey=="1") {
+                return; // Skip processing if any conversion failed
+            }
+
+            structObj.AddDetails(clientIndex, accountKey, tag, instrumentKey, tCode);
+        }
+    }
+
+    // Process an entire file
+    void ProcessFile(const string& filePath) {
+        ifstream file(filePath);
+        if (!file.is_open()) {
+            cerr << "Error opening file: " << filePath << endl;
+            return;
+        }
+
+        string line;
+        getline(file, line);  // Skip the header
+
+        while (getline(file, line)) {
+            ReadLine(line);
+        }
+
+        file.close();
+    }
+
+    // Read all files from a directory
+    void ReadDirectory(const string& folderPath) {
+        DIR* dir;
+        struct dirent* ent;
+
+        if ((dir = opendir(folderPath.c_str())) != nullptr) {
+            while ((ent = readdir(dir)) != nullptr) {
+                string fileName = ent->d_name;
+
+                if (fileName == "." || fileName == "..") {
+                    continue;
+                }
+
+                string filePath = folderPath + "/" + fileName;
+                ProcessFile(filePath);  // Process each file
+            }
+            closedir(dir);
+        } else {
+            cerr << "Could not open directory: " << folderPath << endl;
+        }
+    }
+
+    // Write the report file with client-wise and account-wise details
+    void WriteReportFiles(const string& outputFolderPath) {
+        // Create maps to aggregate details for each client and account
+        map<int, ofstream> clientFiles;
+        map<string, ofstream> accountFiles;
+
+        // Open all necessary files for writing (one per client)
+        for (int i = 0; i < 20; ++i) {
+            const ClientWise& client = structObj.clientWiseStatus[i];
+            if (client.clientID != 0 && !client.instrumentWise.empty()) {  // Ensure clientID is set
+                string filePath = outputFolderPath + "/client_" + to_string(client.clientID) + ".txt";
+                ofstream outFile(filePath);
+
+                if (!outFile.is_open()) {
+                    cerr << "Error opening output file: " << filePath << endl;
+                    continue;
+                }
+
+                clientFiles[client.clientID] = move(outFile);
+            }
+        }
+
+        // Write details to the appropriate files
+        for (int i = 0; i < 20; ++i) {
+            const ClientWise& client = structObj.clientWiseStatus[i];
+            if (client.clientID != 0) {
+                ofstream& outFile = clientFiles[client.clientID];
+
+                // Write the header for the client file
+            //    outFile << "Client ID: " << client.clientID << endl;
+
+                // Check if the client has any instruments
+                if (client.instrumentWise.empty()) {
+                    outFile << "No instrument data available for this client." << endl;
+                } else {
+                    // Write details for each instrument
+                    for (const auto& pair : client.instrumentWise) {
+                        int instrumentKey = pair.first;
+                        const OrderDetails& details = pair.second;
+                        outFile << client.clientID << ",";
+                        outFile << instrumentKey << ",";
+                        outFile << details.ToString() << endl;
+                    }
+                }
+            }
+        }
+
+        // Close all client files
+        for (auto& entry : clientFiles) {
+            entry.second.close();
+        }
+
+        // Open all necessary files for writing (one per account)
+        for (const auto& entry : structObj.accountwise) {
+            const string& accountKey = entry.first;
+            const Accountwise& account = entry.second;
+
+            string filePath = outputFolderPath + "/account_" + accountKey + ".txt";
+            ofstream outFile(filePath);
+
+            if (!outFile.is_open()) {
+                cerr << "Error opening output file: " << filePath << endl;
+                continue;
+            }
+
+            // Write details for each instrument
+            if (account.instrumentWise.empty()) {
+                outFile << "No instrument data available for this account." << endl;
+            } else {
+                for (const auto& pair : account.instrumentWise) {
+                    int instrumentKey = pair.first;
+                    const OrderDetails& details = pair.second;
+                    outFile << accountKey << ",";
+                    outFile << instrumentKey << ",";
+                    outFile << details.ToString() << endl;
+                }
+            }
+
+            outFile.close();
+        }
+    }
+};
+
+int main() {
+    OTR processor;
+    processor.ReadDirectory("NSE_accountoutput");
+    string outputFolderPath = "outputFiles";
+    processor.WriteReportFiles(outputFolderPath);
+
+    return 0;
+}
