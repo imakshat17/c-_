@@ -1,0 +1,222 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <sstream>
+#include <vector>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <map>
+#include <algorithm>
+#include <cctype>
+
+using namespace std;
+
+enum TCODES {
+    TRADE_A = 10103,
+    TRADE_B = 10104,
+    MOD = 10108
+};
+
+enum TAG_INDEX {
+    MOD_Tag = 14,
+    MOD_TOKEN = 16,
+    TRADE_A_TOKEN = 18,
+    TRADE_B_TOKEN = 17,
+    TRADE_first_tag = 17,
+    TRADE_second_tag = 15
+};
+
+struct RECORDS {
+    int Trade_first_count = 0;
+    int Trade_second_count = 0;
+    int modify_count = 0;
+
+    string ToString() const {
+        stringstream ss;
+        int trdCount = Trade_first_count + Trade_second_count;
+        double OTR = (trdCount != 0) ? static_cast<double>(modify_count) / trdCount : static_cast<double>(modify_count) / 1;
+        ss << Trade_first_count << "," << Trade_second_count << "," << modify_count << "," << OTR;
+        return ss.str();
+    }
+};
+
+struct DataStructure {
+    map<int, RECORDS> recordmap;
+
+    // Function to add order details based on key and transaction code
+    void AddDetails(int key, int ordTcode) {
+        if (key == -1) {
+            return;
+        }
+
+        if (recordmap.find(key) == recordmap.end()) {
+            recordmap[key] = RECORDS();
+        }
+
+        switch (ordTcode) {
+            case TRADE_A:
+                recordmap[key].Trade_first_count++;
+                break;
+            case TRADE_B:
+                recordmap[key].Trade_second_count++;
+                break;
+            case MOD:
+                recordmap[key].modify_count++;
+                break;
+        }
+    }
+
+    void WriteAllToFile(const string& filePath) {
+        ofstream outFile(filePath);
+        if (!outFile.is_open()) {
+            cerr << "Error opening output file: " << filePath << endl;
+            return;
+        }
+
+        // Write header
+        outFile << "InstrumentKey,TradeFirstCount,TradeSecondCount,ModifyCount,OTR\n";
+
+        // Iterate over the map and write each record
+        for (const auto& [clientId, record] : recordmap) {
+            outFile << clientId << "," << record.ToString() << endl;
+        }
+
+        outFile.close();
+    }
+};
+
+class BSE_OTR {
+private:
+    DataStructure structObj;
+
+public:
+ void ReadLine(const string& line) {
+    istringstream stream(line);
+    string segment;
+    int tcode;
+    int key = -1;
+    vector<string> fields;
+
+    // Split the line into fields using '|'
+    while (getline(stream, segment, '|')) {
+        fields.push_back(segment);
+    }
+
+    // Check if there are enough fields before accessing them
+    if (fields.size() <= 1) {
+        return; // Skip this line if insufficient fields
+    }
+
+    // Ensure fields[1] is numeric before attempting stoi
+    if (!fields[1].empty() && all_of(fields[1].begin(), fields[1].end(), ::isdigit)) {
+        try {
+            tcode = stoi(fields[1]);
+        } catch (const std::invalid_argument&) {
+            return; // Skip this line if tcode conversion fails
+        } catch (const std::out_of_range&) {
+            return; // Skip this line if tcode is out of range
+        }
+    } else {
+        return; // Skip this line if tcode format is invalid
+    }
+
+    // Extract key based on the tcode
+    switch (tcode) {
+        case TRADE_A:
+            if (TRADE_A_TOKEN < fields.size() && !fields[TRADE_A_TOKEN].empty() && all_of(fields[TRADE_A_TOKEN].begin(), fields[TRADE_A_TOKEN].end(), ::isdigit)) {
+                try {
+                    key = stoi(fields[TRADE_A_TOKEN]);
+                } catch (const std::invalid_argument&) {
+                    return; // Skip this line if key conversion fails
+                } catch (const std::out_of_range&) {
+                    return; // Skip this line if key is out of range
+                }
+            }
+            break;
+        case TRADE_B:
+            if (TRADE_B_TOKEN < fields.size() && !fields[TRADE_B_TOKEN].empty() && all_of(fields[TRADE_B_TOKEN].begin(), fields[TRADE_B_TOKEN].end(), ::isdigit)) {
+                try {
+                    key = stoi(fields[TRADE_B_TOKEN]);
+                } catch (const std::invalid_argument&) {
+                    return; // Skip this line if key conversion fails
+                } catch (const std::out_of_range&) {
+                    return; // Skip this line if key is out of range
+                }
+            }
+            break;
+        case MOD:
+            if (MOD_TOKEN < fields.size() && !fields[MOD_TOKEN].empty() && all_of(fields[MOD_TOKEN].begin(), fields[MOD_TOKEN].end(), ::isdigit)) {
+                try {
+                    key = stoi(fields[MOD_TOKEN]);
+                } catch (const std::invalid_argument&) {
+                    return; // Skip this line if key conversion fails
+                } catch (const std::out_of_range&) {
+                    return; // Skip this line if key is out of range
+                }
+            }
+            break;
+        default:
+            return; // Ignore lines with unknown tcode
+    }
+
+    // If key is valid, add details
+    if (key != -1) {
+        structObj.AddDetails(key, tcode);
+    }
+}
+
+
+    void ProcessFile(const string& filePath) {
+        ifstream file(filePath);
+        if (!file.is_open()) {
+            cerr << "Error opening file: " << filePath << endl;
+            return;
+        }
+
+        string line;
+
+
+        while (getline(file, line)) {
+            ReadLine(line);
+        }
+
+        file.close();
+    }
+
+    // Read all files from a directory
+    void ReadDirectory(const string& folderPath) {
+        DIR* dir;
+        struct dirent* ent;
+
+        if ((dir = opendir(folderPath.c_str())) != nullptr) {
+            while ((ent = readdir(dir)) != nullptr) {
+                string fileName = ent->d_name;
+
+                if (fileName == "." || fileName == "..") {
+                    continue;
+                }
+
+                string filePath = folderPath + "/" + fileName;
+                ProcessFile(filePath); // Process each file
+            }
+            closedir(dir);
+        } else {
+            cerr << "Could not open directory: " << folderPath << endl;
+        }
+    }
+
+    // Write the report into one consolidated file
+    void WriteReportFile(const string& outputFilePath) {
+        structObj.WriteAllToFile(outputFilePath);
+    }
+};
+
+int main() {
+    BSE_OTR bseOtr;
+    bseOtr.ReadDirectory("InputFiles");  // Replace with actual input directory path
+    bseOtr.WriteReportFile("outputFiles/consolidated_report.txt");  // Replace with actual output file path
+
+    return 0;
+}
