@@ -1,0 +1,226 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <sstream>
+#include <vector>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <map>
+#include <algorithm>
+#include <cctype>
+
+using namespace std;
+
+enum TCODES {
+    TRADE_TCODE_FIRST = 10103,
+    TRADE_TCODE_SECOND = 10104,
+    MODIFY_TCODE = 10108
+};
+
+enum TAG_INDEX {
+    MOD_Tag = 14,
+    TRADE_first_tag = 17,
+    TRADE_second_tag = 15
+};
+
+struct RECORDS {
+    int clientID;
+    int Trade_first_count = 0;
+    int Trade_second_count = 0;
+    int modify_count = 0;
+
+    string ToString() const {
+        stringstream ss;
+        int trdCount = Trade_first_count + Trade_second_count;
+        double OTR = (trdCount != 0) ? static_cast<double>(modify_count) / trdCount : static_cast<double>(modify_count) / 1;
+        ss << Trade_first_count << "," << Trade_second_count << "," << modify_count << "," << OTR;
+        return ss.str();
+    }
+};
+
+struct CLIENT {
+    int clientId;
+    RECORDS record;
+
+    void Adddetails(int tag, int tcode) {
+        clientId = tag;
+        switch (tcode) {
+            case TRADE_TCODE_FIRST:
+                record.Trade_first_count++;
+                break;
+            case TRADE_TCODE_SECOND:
+                record.Trade_second_count++;
+                break;
+            case MODIFY_TCODE:
+                record.modify_count++;
+                break;
+        }
+    }
+};
+
+class BSE_OTR {
+private:
+    CLIENT client[30];
+
+int extractClient(const string& str) {
+    if (str.size() < 3) {
+        cerr << "Error: String is too short to extract client ID: " << str << endl;
+        return -1; // Handle the error case as needed
+    }
+
+    string temp = str.substr(0, 3);
+
+    if (!all_of(temp.begin(), temp.end(), ::isdigit)) {
+        cerr << "Error: Non-numeric characters in client ID field: " << temp << endl;
+        return -1; // Handle the error case as needed
+    }
+
+    int client_id = stoi(temp);
+    return client_id;
+}
+
+public:
+    map<int, int> Tcode_rel_tag = {
+        {MODIFY_TCODE, MOD_Tag},
+        {TRADE_TCODE_FIRST, TRADE_first_tag},
+        {TRADE_TCODE_SECOND, TRADE_second_tag}
+    };
+
+    void ReadLine(const string& line) {
+        istringstream stream(line);
+        string segment;
+        int tcode;
+        vector<string> fields;
+
+        while (getline(stream, segment, '|')) {
+            fields.push_back(segment);
+        }
+
+        if (fields.size() > max(TRADE_first_tag, TRADE_second_tag)) {
+            int tag = 0;
+         //   for(const auto& str:fields){
+       //            cout<<str<<",";
+
+         //   }
+            // cout<<"................."<<endl;
+            /// cout<<"Tcode is"<<fields[1]<<endl;
+            try {
+    tcode = stoi(fields[1]);
+    // Proceed with your logic
+} catch (const std::invalid_argument& e) {
+    cerr << "Error: Invalid argument in tcode conversion: " << fields[1] << endl;
+}
+
+
+            if (Tcode_rel_tag.find(tcode) != Tcode_rel_tag.end()) {
+                tag = extractClient(fields[Tcode_rel_tag[tcode]]);
+                 // cout<<tag<<endl;
+                if (tag >= 101 && tag <= 130) {  // Assuming client IDs are between 101 and 130
+                    client[tag - 101].Adddetails(tag, tcode);
+}
+
+            }
+        }
+    }
+
+    void ProcessFile(const string& filePath) {
+        ifstream file(filePath);
+        if (!file.is_open()) {
+            cerr << "Error opening file: " << filePath << endl;
+            return;
+        }
+
+        string line;
+        getline(file, line);  // Skip the header
+
+        while (getline(file, line)) {
+            ReadLine(line);
+        }
+
+        file.close();
+    }
+
+    // Read all files from a directory
+    void ReadDirectory(const string& folderPath) {
+        DIR* dir;
+        struct dirent* ent;
+
+        if ((dir = opendir(folderPath.c_str())) != nullptr) {
+            while ((ent = readdir(dir)) != nullptr) {
+                string fileName = ent->d_name;
+
+                if (fileName == "." || fileName == "..") {
+                    continue;
+                }
+
+                string filePath = folderPath + "/" + fileName;
+                ProcessFile(filePath);  // Process each file
+            }
+            closedir(dir);
+        } else {
+            cerr << "Could not open directory: " << folderPath << endl;
+        }
+    }
+
+    // Write the report file with client-wise and account-wise details
+    void WriteReportFiles(const string& outputFolderPath) {
+    // Map to store file streams for each client
+    map<int, ofstream> clientFiles;
+
+    // Open necessary files for writing, only for clients with valid data
+    for (int i = 0; i < 30; ++i) {
+        // Check if the client has valid records (i.e., any of the counts are non-zero)
+        if (client[i].clientId != 0 &&
+            (client[i].record.Trade_first_count > 0 || client[i].record.Trade_second_count > 0 || client[i].record.modify_count > 0)) {
+
+            string filePath = outputFolderPath + "/client_" + to_string(client[i].clientId) + ".txt";
+            ofstream outFile(filePath);
+
+            if (!outFile.is_open()) {
+                cerr << "Error opening output file: " << filePath << endl;
+                continue;
+            }
+
+            clientFiles[client[i].clientId] = move(outFile);
+        }
+    }
+
+    // Write details to the appropriate client files
+    for (int i = 0; i < 30; ++i) {
+        // Only write to files for clients with valid data
+        if (client[i].clientId != 0 &&
+            (client[i].record.Trade_first_count > 0 || client[i].record.Trade_second_count > 0 || client[i].record.modify_count > 0)) {
+
+            ofstream& outFile = clientFiles[client[i].clientId];
+
+            // Write the data in the required format
+            int totalTradeFirst = client[i].record.Trade_first_count;
+            int totalTradeSecond = client[i].record.Trade_second_count;
+            int totalModifies = client[i].record.modify_count;
+            double OTR = (totalTradeFirst + totalTradeSecond != 0) ? static_cast<double>(totalModifies) / (totalTradeFirst + totalTradeSecond) : 0.0;
+
+            outFile << client[i].clientId << ","
+                    << totalTradeFirst << ","
+                    << totalTradeSecond << ","
+                    << totalModifies << ","
+                    << OTR << endl;
+        }
+    }
+
+    // Close all client files
+    for (auto& entry : clientFiles) {
+        entry.second.close();
+    }
+}
+
+};
+
+int main() {
+    BSE_OTR bseOtr;
+    bseOtr.ReadDirectory("InputFiles");  // Replace with actual directory path
+    bseOtr.WriteReportFiles("outputFiles");  // Replace with actual output directory path
+
+    return 0;
+}
