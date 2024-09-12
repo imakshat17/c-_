@@ -1,0 +1,590 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <sstream>
+#include <vector>
+#include <dirent.h>
+#include <sys/types.h>
+#include <map>
+#include <algorithm>
+#include <cctype>
+#include <sys/stat.h> // Required for stat
+#include <sys/types.h> // Required for stat
+
+using namespace std;
+
+#define client_array_lim 20
+
+// /Enum for different order types (Transaction codes)
+// NSE
+enum ORDER {
+    NEW = 2073,
+    MOD = 2074,
+    CXL = 2075,
+    TRD = 2222
+};
+
+// Enum for indices and offsets
+enum INDEX_ID {
+    TCODE = 2,
+    TAG = 4,      // Assuming 'Tag' is at index 4
+    TOKEN_1 = 11, // Token index for order files
+    TOKEN_2 = 23, // Token index for trade files
+    CLIENT_OFFSET = 111, // Client offset
+    TRADE_ACCOUNT_INDEX = 9,   // Trade account index
+    ORDER_ACCOUNT_INDEX = 15    // Order file account index
+};
+
+// BSE
+enum BSE_TCODES {
+    TRADE_A = 10103,
+    TRADE_B = 10104,
+    BMOD = 10108
+};
+
+enum BSE_TAG_INDEX {
+    MOD_Tag = 14,
+    MOD_TOKEN = 16,
+    TRADE_A_TOKEN = 18,
+    TRADE_B_TOKEN = 17,
+    TRADE_first_tag = 17,
+    TRADE_second_tag = 15
+};
+struct OrderDetails {
+    int newOrderCount = 0;
+    int modCount = 0;
+    int cxlCount = 0;
+    int trdCount = 0;
+
+    string ToString() const {
+        stringstream ss;
+        double OTR = (trdCount != 0) ? static_cast<double>(modCount) / trdCount : static_cast<double>(modCount) / 1;
+        ss << newOrderCount << "," << modCount << "," << cxlCount << "," << trdCount << "," << OTR;
+        return ss.str();
+    }
+};
+struct RECORDS {
+    int Trade_first_count = 0;
+    int Trade_second_count = 0;
+    int mod_count = 0;
+
+    string ToString() const {
+        stringstream ss;
+        int trdCount = Trade_first_count + Trade_second_count;
+        double OTR = (trdCount != 0) ? static_cast<double>(mod_count) / trdCount : static_cast<double>(mod_count) / 1;
+        ss << trdCount << "," << mod_count << "," << OTR;
+        return ss.str();
+    }
+};
+struct BSE_DataStructure {
+    map<int, RECORDS> recordmap;
+
+    // Function to add order details based on key and transaction code
+    void AddDetails(int key, int ordTcode) {
+        if (key == -1) {
+            return;
+        }
+
+        if (recordmap.find(key) == recordmap.end()) {
+            recordmap[key] = RECORDS();
+        }
+
+        switch (ordTcode) {
+            case TRADE_A:
+                recordmap[key].Trade_first_count++;
+                break;
+            case TRADE_B:
+                recordmap[key].Trade_second_count++;
+                break;
+            case BMOD:
+                recordmap[key].mod_count++;
+                break;
+        }
+    }
+
+    void WriteAllToFile(const string& filePath) {
+        ofstream outFile(filePath);
+        if (!outFile.is_open()) {
+            cerr << "Error opening output file: " << filePath << endl;
+            return;
+        }
+
+        // Write header
+        outFile << "InstrumentKey,TradeCount,mod_count,OTR\n";
+
+        // Iterate over the map and write each record
+        for (const auto& [InstrumentKey, record] : recordmap) {
+            outFile << InstrumentKey << "," << record.ToString() << endl;
+        }
+
+        outFile.close();
+    }
+};
+struct ClientWise {
+    int clientID = 0;
+    map<int, OrderDetails> instrumentWise;
+    OrderDetails totalOrderDetails;
+
+    void AddDetails(int instrumentKey, int ordTcode) {
+        if (instrumentWise.find(instrumentKey) == instrumentWise.end()) {
+            instrumentWise[instrumentKey] = OrderDetails();
+        }
+
+        switch (ordTcode) {
+            case NEW:
+                instrumentWise[instrumentKey].newOrderCount++;
+                totalOrderDetails.newOrderCount++;
+                break;
+            case MOD:
+                instrumentWise[instrumentKey].modCount++;
+                totalOrderDetails.modCount++;
+                break;
+            case CXL:
+                instrumentWise[instrumentKey].cxlCount++;
+                totalOrderDetails.cxlCount++;
+                break;
+            case TRD:
+                instrumentWise[instrumentKey].trdCount++;
+                totalOrderDetails.trdCount++;
+                break;
+        }
+    }
+};
+struct Accountwise {
+    string accountNumber;
+    map<int, OrderDetails> instrumentWise;
+    OrderDetails totalOrderDetails;
+
+    void AddDetails(int instrumentKey, int ordTcode) {
+        if (instrumentWise.find(instrumentKey) == instrumentWise.end()) {
+            instrumentWise[instrumentKey] = OrderDetails();
+        }
+
+        switch (ordTcode) {
+            case NEW:
+                instrumentWise[instrumentKey].newOrderCount++;
+                totalOrderDetails.newOrderCount++;
+                break;
+            case MOD:
+                instrumentWise[instrumentKey].modCount++;
+                totalOrderDetails.modCount++;
+                break;
+            case CXL:
+                instrumentWise[instrumentKey].cxlCount++;
+                totalOrderDetails.cxlCount++;
+                break;
+            case TRD:
+                instrumentWise[instrumentKey].trdCount++;
+                totalOrderDetails.trdCount++;
+                break;
+        }
+    }
+};
+
+struct DataStructure {
+    ClientWise clientWiseStatus[client_array_lim]; // Array to store client-wise statuses
+    map<string, Accountwise> accountwise;
+
+    // Method to add details per client and per instrument
+    void AddDetails(int clientIndex, const string& accountKey, int tag, int instrumentKey, int ordTcode) {
+        if (clientIndex < 0 || clientIndex >= 20) {
+            cerr << "Invalid client index: " << clientIndex << endl;
+            return;
+        }
+        clientWiseStatus[clientIndex].clientID = tag;
+        clientWiseStatus[clientIndex].AddDetails(instrumentKey, ordTcode);
+         //cout<<accountKey<<endl;
+        if (accountwise.find(accountKey) == accountwise.end()) {
+            accountwise[accountKey] = Accountwise();
+            accountwise[accountKey].accountNumber = accountKey;
+        }
+        accountwise[accountKey].AddDetails(instrumentKey, ordTcode);
+    }
+};
+
+// Function to trim whitespace from a string
+string TrimWhitespace(const string& str) {
+    string trimmedStr = str;
+    trimmedStr.erase(trimmedStr.begin(), find_if(trimmedStr.begin(), trimmedStr.end(), [](unsigned char ch) {
+        return !isspace(ch);
+    }));
+    trimmedStr.erase(find_if(trimmedStr.rbegin(), trimmedStr.rend(), [](unsigned char ch) {
+        return !isspace(ch);
+    }).base(), trimmedStr.end());
+    return trimmedStr;
+}
+
+// Function to safely convert string to integer
+int SafeStoi(const string& str) {
+    string trimmedStr = TrimWhitespace(str);
+
+    if (trimmedStr.empty()) {
+        return -1; // Return an invalid number to indicate failure
+    }
+
+    try {
+        size_t pos;
+        int result = stoi(trimmedStr, &pos);
+        if (pos < trimmedStr.length()) {
+            return -1; // Return an invalid number to indicate failure
+        }
+        return result;
+    } catch (const invalid_argument&) {
+        return -1; // Return an invalid number to indicate failure
+    } catch (const out_of_range&) {
+        return -1; // Return an invalid number to indicate failure
+    }
+}
+
+// OTR class
+class OTR {
+private:
+    DataStructure structObj;
+    BSE_DataStructure BSE_structObj;
+
+public:// Helper function to process a single line from the file
+    void ReadLine(const string& line, bool NSE) {
+        if (NSE) {
+            istringstream stream(line);
+            string segment;
+            vector<string> fields;
+
+            while (getline(stream, segment, '|')) {
+                fields.push_back(segment);
+            }
+
+            if (fields.size() > max(TOKEN_1, TOKEN_2)) {
+                int tCode = SafeStoi(fields[TCODE]); // Transaction code
+                if (tCode == -1) return;
+
+                string tagStr = fields[TAG].substr(0, 3);
+                int tag = SafeStoi(tagStr);
+                if (tag == -1) return;
+             //   cout<<"Tag is"<<tag<<endl;
+           //  cout<<fields[TAG]<<endl;
+                int clientIndex = tag - CLIENT_OFFSET;
+
+                int instrumentKey;
+                string accountKey;
+                if (tCode == TRD) {
+                    instrumentKey = SafeStoi(fields[TOKEN_2]);
+                    accountKey = TrimWhitespace(fields[TRADE_ACCOUNT_INDEX]);
+                } else {
+                    instrumentKey = SafeStoi(fields[TOKEN_1]);
+                    accountKey = TrimWhitespace(fields[ORDER_ACCOUNT_INDEX]);
+                }
+
+                if (instrumentKey == -1 || accountKey.empty() || accountKey == "1") {
+                    return;
+                }
+
+                if (!accountKey.empty() && instrumentKey != -1) {
+                    structObj.AddDetails(clientIndex, accountKey, tag, instrumentKey, tCode);
+                }
+            }
+        } else {
+            istringstream stream(line);
+            string segment;
+            int tcode;
+            int key = -1;
+            vector<string> fields;
+
+            while (getline(stream, segment, '|')) {
+                fields.push_back(segment);
+            }
+
+            if (fields.size() <= 1) {
+                return;
+            }
+
+            if (!fields[1].empty() && all_of(fields[1].begin(), fields[1].end(), ::isdigit)) {
+                try {
+                    tcode = stoi(fields[1]);
+                } catch (const std::invalid_argument&) {
+                    return;
+                } catch (const std::out_of_range&) {
+                    return;
+                }
+            } else {
+                return;
+            }
+
+            switch (tcode) {
+                case TRADE_A:
+                    if (TRADE_A_TOKEN < fields.size() && !fields[TRADE_A_TOKEN].empty() && all_of(fields[TRADE_A_TOKEN].begin(), fields[TRADE_A_TOKEN].end(), ::isdigit)) {
+                        try {
+                            key = stoi(fields[TRADE_A_TOKEN]);
+                        } catch (const std::invalid_argument&) {
+                            return;
+                        } catch (const std::out_of_range&) {
+                            return;
+                        }
+                    }
+                    break;
+                case TRADE_B:
+                    if (TRADE_B_TOKEN < fields.size() && !fields[TRADE_B_TOKEN].empty() && all_of(fields[TRADE_B_TOKEN].begin(), fields[TRADE_B_TOKEN].end(), ::isdigit)) {
+                        try {
+                            key = stoi(fields[TRADE_B_TOKEN]);
+                        } catch (const std::invalid_argument&) {
+                            return;
+                        } catch (const std::out_of_range&) {
+                            return;
+                        }
+                    }
+                    break;
+                case BMOD:
+                    if (MOD_TOKEN < fields.size() && !fields[MOD_TOKEN].empty() && all_of(fields[MOD_TOKEN].begin(), fields[MOD_TOKEN].end(), ::isdigit)) {
+                        try {
+                            key = stoi(fields[MOD_TOKEN]);
+                        } catch (const std::invalid_argument&) {
+                            return;
+                        } catch (const std::out_of_range&) {
+                            return;
+                        }
+                    }
+                    break;
+                default:
+                    return;
+            }
+
+            if (key != -1) {
+                BSE_structObj.AddDetails(key, tcode);
+            }
+        }
+    }
+
+
+  void WriteClientwiseReport(const string& outputFolderPath) {
+    // Ensure the output folder exists
+    // This is a simple check; you might want to add directory creation logic if needed
+    struct stat info;
+    if (stat(outputFolderPath.c_str(), &info) != 0 || !(info.st_mode & S_IFDIR)) {
+        cerr << "Directory does not exist: " << outputFolderPath << endl;
+        return;
+    }
+
+    bool anyClientData = false; // Track if any client data was written
+
+    for (const auto& client : structObj.clientWiseStatus) {
+        if (client.clientID == 0) continue; // Skip clients with no ID
+
+        // Generate file path for each client
+        string clientFilePath = outputFolderPath + "/client_" + to_string(client.clientID) + "_report.csv";
+
+        ofstream outFile(clientFilePath);
+        if (!outFile.is_open()) {
+            cerr << "Error opening output file: " << clientFilePath << endl;
+            continue;
+        }
+
+        outFile << "InstrumentKey,NewOrderCount,ModifyCount,CXLCount,TradeCount,OTR\n";
+
+        for (const auto& [instrumentKey, details] : client.instrumentWise) {
+            outFile << instrumentKey << "," << details.ToString() << endl;
+        }
+
+        outFile.close();
+        anyClientData = true; // Indicate that at least one client file was written
+    }
+
+    if (!anyClientData) {
+        cerr << "No client data available to write." << endl;
+    }
+}
+void WriteClientWiseReport_Indexwise(const string& outputFolderPath, int &Indx) {
+    // Ensure the folder path ends with a '/'
+    string folderPath = outputFolderPath;
+    if (folderPath.back() != '/' && folderPath.back() != '\\') {
+        folderPath += '/';
+    }
+
+    // Check if the index is within valid range
+    if (Indx < 0 || Indx >= client_array_lim) {
+        cerr << "Invalid client index: " << Indx << endl;
+        return;
+    }
+
+    // Get the client details for the given index
+    const ClientWise& client = structObj.clientWiseStatus[Indx];
+
+    // Create the output file path for the client
+    string filePath = folderPath + "Client_" + to_string(client.clientID) + "_Report.csv";
+    ofstream outFile(filePath);
+    if (!outFile.is_open()) {
+        cerr << "Error opening output file: " << filePath << endl;
+        return;
+    }
+
+    // Write header
+    outFile << "ClientID,InstrumentKey,NewOrderCount,ModifyCount,CXLCount,TradeCount,OTR\n";
+
+    // Check if the client has any instruments
+    if (client.instrumentWise.empty()) {
+       cerr<<"No instument data available"<<endl;
+    } else {
+        // Write details for each instrument
+        for (const auto& pair : client.instrumentWise) {
+            int instrumentKey = pair.first;
+            const OrderDetails& details = pair.second;
+            outFile << client.clientID << ",";
+            outFile << instrumentKey << ",";
+            outFile << details.ToString() << endl;
+        }
+    }
+
+    outFile.close();
+}
+
+
+
+
+    void WriteAccountwiseReport(const string& filePath) {
+        ofstream outFile(filePath);
+        if (!outFile.is_open()) {
+            cerr << "Error opening output file: " << filePath << endl;
+            return;
+        }
+
+        outFile << "AccountNumber,InstrumentKey,NewOrderCount,ModifyCount,CXLCount,TradeCount,OTR\n";
+
+        bool dataAvailable = false;
+        for (const auto& [accountKey, accountDetails] : structObj.accountwise) {
+            if (accountDetails.instrumentWise.empty()) {
+                outFile << "No instrument data available for account: " << accountKey << endl;
+            } else {
+                dataAvailable = true;
+                for (const auto& [instrumentKey, details] : accountDetails.instrumentWise) {
+                    outFile << accountKey << "," << instrumentKey << "," << details.ToString() << endl;
+                }
+                outFile << accountKey << ",Total," << accountDetails.totalOrderDetails.ToString() << endl;
+            }
+        }
+
+        if (!dataAvailable) {
+            outFile << "No account data available." << endl;
+        }
+
+        outFile.close();
+    }
+
+    void WriteBSEReport(const string& filePath) {
+        BSE_structObj.WriteAllToFile(filePath);
+    }
+};
+
+
+// Non-member function to read file based on NSE flag
+void ReadFile(OTR& otr, const string& filePath, bool NSE) {
+    ifstream file(filePath);
+    if (!file.is_open()) {
+        cerr << "Error opening file: " << filePath << endl;
+        return;
+    }
+
+    string line;
+    while (getline(file, line)) {
+        otr.ReadLine(line, NSE);  // Access ReadLine through the OTR object
+    }
+    file.close();
+}
+
+
+
+
+// Function to process a folder
+void ReadFolder(const string& folderPath, OTR& otr, bool NSE) {
+    DIR* dir;
+    struct dirent* ent;
+
+    if ((dir = opendir(folderPath.c_str())) != nullptr) {
+        while ((ent = readdir(dir)) != nullptr) {
+            string fileName = ent->d_name;
+            if (fileName != "." && fileName != "..") {
+                string filePath = folderPath + "/" + fileName;
+                ReadFile(otr, filePath, NSE); // Correctly call ReadFile function
+            }
+        }
+        closedir(dir);
+    } else {
+        cerr << "Could not open directory: " << folderPath << endl;
+    }
+}
+
+int extactIndex(string &choice){
+      string temp;
+      for(const auto& ch:choice){
+            if(isdigit(ch)){
+                   temp+=ch;
+            }
+      }
+      if(!temp.empty()){
+          return stoi(temp)-1;
+      }
+
+
+  return -1;
+  }
+
+int main() {
+    string outputPath = "OUTPUT";
+ //   string clientpath="client_output";
+ //   OTR otr;
+  //  bool NSE = true;  // Set NSE or BSE based on input files
+
+     //Reading NSE files
+   // ReadFolder("INPUT_NSE", otr, NSE);
+ //   otr.WriteClientwiseReport(clientpath); // Separate folder for client reports
+   // otr.WriteAccountwiseReport(outputPath + "_NSE_accountwise_report.csv");
+
+    // Reading BSE files
+  //  NSE = false;
+ //   ReadFolder("INPUT_BSE", otr, NSE);
+  //  otr.WriteBSEReport(outputPath + "_BSE_report.csv");
+
+     bool flag;
+     string temp;
+     cout<<"Enter NSE or BSE"<<endl;
+     cin>>temp;
+     if(temp=="NSE"){
+          flag=true;
+          string foldername;
+          cout<<"Enter source folder name"<<endl;
+          cin>>foldername;
+              string choice;
+              cout<<"ClientwiseType(c or cindex) or accountwise(a)"<<endl;
+              cin>>choice;
+
+              if(choice=="c"){
+                   OTR otr;
+                   ReadFolder(foldername, otr, flag);
+                   otr.WriteClientwiseReport(outputPath);
+              }
+              else if(choice=="a"){
+                   OTR otr;
+                 ReadFolder(foldername, otr, flag);
+                 otr.WriteAccountwiseReport(outputPath + "_NSE_accountwise_report.csv");
+              }
+              else{
+                  int index= extactIndex(choice);
+                  OTR otr;
+                  ReadFolder(foldername, otr, flag);
+                  otr.WriteClientWiseReport_Indexwise(outputPath,index);
+
+              }
+
+     }
+     else{
+         flag=false;
+        string foldername;
+        cout<<"Enter source folder name"<<endl;
+        cin>>foldername;
+        OTR otr;
+        ReadFolder(foldername, otr, flag);
+        otr.WriteBSEReport(outputPath + "_BSE_report.csv");
+     }
+
+
+
+    return 0;
+}
