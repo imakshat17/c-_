@@ -1,0 +1,205 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <map>
+#include <vector>
+#include <algorithm> // For std::sort
+
+using namespace std;
+
+// Structure to temporarily store the data before conversion
+struct Temp {
+    string res;
+    string streamId;
+    string token;
+    string instType;
+    string symbol;
+    string expiry;
+    string strike;
+    string optType;
+
+    // Comparator for sorting first by strike and then by expiry
+    bool operator<(const Temp& other) const {
+        if (stoi(strike) == stoi(other.strike)) {
+            return stoi(expiry) < stoi(other.expiry);
+        }
+        return stoi(strike) < stoi(other.strike);
+    }
+};
+
+// Structure to store the final data
+struct Data {
+    string symbol;
+    int expiry;
+    string instType;
+    string optType; // XX, CE, PE
+    int strikeMin;
+    int strikeMax;
+    int strikeGap;
+};
+
+// Function to read the file and store the data in a vector of Temp
+vector<Temp> readFileAndStoreData(const string& filename) {
+    vector<Temp> allData;
+    ifstream file(filename);
+    string line;
+
+    if (!file.is_open()) {
+        cerr << "Error opening file: " << filename << endl;
+        return allData;
+    }
+
+    // Skip header line
+    getline(file, line);
+
+    while (getline(file, line)) {
+        stringstream ss(line);
+        string res, streamIdStr, tokenStr, instType, symbol, expiryStr, strikeStr, optType;
+
+        getline(ss, res, ',');
+        getline(ss, streamIdStr, ',');
+        getline(ss, tokenStr, ',');
+        getline(ss, instType, ',');
+        getline(ss, symbol, ',');
+        getline(ss, expiryStr, ',');
+        getline(ss, strikeStr, ',');
+        getline(ss, optType, ',');
+
+        // Check if any required field is missing
+        if (streamIdStr.empty() || expiryStr.empty() || strikeStr.empty()) {
+            cerr << "Error: Missing required field(s) in line: " << line << endl;
+            continue;
+        }
+
+        Temp data = {res, streamIdStr, tokenStr, instType, symbol, expiryStr, strikeStr, optType};
+
+        // Add data to the vector
+        allData.push_back(data);
+    }
+
+    file.close();
+    return allData;
+}
+
+// Function to sort the data by strike and expiry
+void sortData(vector<Temp>& allData) {
+    sort(allData.begin(), allData.end()); // Uses the overloaded < operator in the Temp struct
+}
+
+// Function to update or add Data in the map
+void updateOrAddData(map<int, vector<Data>>& allStreamInfo, int streamId, const Data& newData) {
+    vector<Data>& dataList = allStreamInfo[streamId];
+    bool found = false;
+
+    for (auto& data : dataList) {
+        if (data.symbol == newData.symbol &&
+            data.expiry == newData.expiry &&
+            data.optType == newData.optType) {
+            // Update existing data
+            data.strikeMin = min(data.strikeMin, newData.strikeMin);
+            data.strikeMax = max(data.strikeMax, newData.strikeMax);
+            data.strikeGap = data.strikeMax - data.strikeMin;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        // Add new data
+        dataList.push_back(newData);
+    }
+}
+
+// Function to populate the map after sorting
+map<int, vector<Data>> populateMapAfterSorting(const vector<Temp>& sortedData) {
+    map<int, vector<Data>> allStreamInfo;
+
+    for (const auto& tempData : sortedData) {
+        int streamId = stoi(tempData.streamId); // Parsing streamId from string to int
+
+        // Convert Temp to Data
+        Data data;
+        data.symbol = tempData.symbol;
+        data.expiry = stoi(tempData.expiry); // Convert expiry to int
+        data.instType = tempData.instType;
+        data.optType = tempData.optType;
+        data.strikeMin = data.strikeMax = stoi(tempData.strike);
+        data.strikeGap = 0; // Set to 0 initially
+
+        updateOrAddData(allStreamInfo, streamId, data);
+    }
+
+    return allStreamInfo;
+}
+
+// Function to generate the report
+void generateReport(const map<int, vector<Data>>& allStreamInfo, const string& reportFilename) {
+    ofstream reportFile(reportFilename);
+
+    if (!reportFile.is_open()) {
+        cerr << "Error opening report file: " << reportFilename << endl;
+        return;
+    }
+
+    reportFile << "StreamId,Symbol,Expiry,OptType,StrikeMin,StrikeMax,StrikeGap\n";
+
+    for (const auto& [streamId, dataList] : allStreamInfo) {
+        for (const auto& data : dataList) {
+            reportFile << streamId << "," << data.symbol << "," << data.expiry
+                       << "," << data.optType << "," << data.strikeMin
+                       << "," << data.strikeMax << "," << data.strikeGap << "\n";
+        }
+    }
+
+    reportFile.close();
+}
+// Function to print the sorted data
+// Function to write the sorted data to a file
+void writeSortedDataToFile(const vector<Temp>& sortedData, const string& filename) {
+    ofstream outFile(filename);
+
+    if (!outFile.is_open()) {
+        cerr << "Error opening file: " << filename << endl;
+        return;
+    }
+
+    outFile << "res,streamId,token,instType,symbol,expiry,strike,optType\n";
+    for (const auto& temp : sortedData) {
+        outFile << temp.res << ","
+                << temp.streamId << ","
+                << temp.token << ","
+                << temp.instType << ","
+                << temp.symbol << ","
+                << temp.expiry << ","
+                << temp.strike << ","
+                << temp.optType << "\n";
+    }
+
+    outFile.close();
+}
+
+
+int main() {
+    //if (argc < 3) {
+       // cerr << "Usage: " << argv[0] << " <input_file> <output_file>" << endl;
+      //  return 1;
+    //}
+
+    string filename = "testfile.csv";         // Input file
+    string reportFilename ="report.csv";   // Output report file
+    string sortedreport="sorted.csv";
+    // Step 1: Read data from the input file and store in a vector of Temp
+    vector<Temp> tempData = readFileAndStoreData(filename);
+
+    // Step 2: Sort the data by strike and expiry
+    sortData(tempData);
+ writeSortedDataToFile(tempData,sortedreport);
+    // Step 3: Populate the map with sorted data
+   // map<int, vector<Data>> allStreamInfo = populateMapAfterSorting(tempData);
+
+    // Step 4: Generate the report
+   // generateReport(allStreamInfo, reportFilename);
+
+    return 0;
+}
