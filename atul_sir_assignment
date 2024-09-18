@@ -1,0 +1,130 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <map>
+#include <list>
+#include <unistd.h> // For getcwd()
+
+using namespace std;
+
+// Structure to store the data
+struct Data {
+    string symbol;
+    int expiry;
+    string optType; // XX, CE, PE
+    int strikeMin;
+    int strikeMax;
+    int strikeGap;
+};
+
+// Function to update or add data in the map
+void updateOrAddData(map<int, list<Data>>& allStreamInfo, int streamId, const Data& newData) {
+    auto& dataList = allStreamInfo[streamId];
+    bool found = false;
+
+    for (auto& data : dataList) {
+        if (data.symbol == newData.symbol &&
+            data.expiry == newData.expiry &&
+            data.optType == newData.optType) {
+            // Update existing data
+            data.strikeMin = newData.strikeMin;
+            data.strikeMax = newData.strikeMax;
+            data.strikeGap = data.strikeMax-data.strikeMin;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        // Add new data
+        dataList.push_back(newData);
+    }
+}
+
+// Function to read the file and populate the map
+map<int, list<Data>> readFileAndPopulateMap(const string& filename) {
+  //  cout << "Entering readFileAndPopulateMap function." << endl;
+    map<int, list<Data>> allStreamInfo;
+    ifstream file(filename);
+    string line;
+
+    if (!file.is_open()) {
+        cerr << "Error opening file: " << filename << endl;
+        return allStreamInfo;
+    }
+
+    // Skip header line
+    getline(file, line);
+
+    while (getline(file, line)) {
+   //     cout << "Reading line: " << line << endl;
+        stringstream ss(line);
+        string res, streamIdStr, tokenStr, instType, symbol, expiryStr, strikeStr, optType;
+
+        getline(ss, res, ',');
+        getline(ss, streamIdStr, ',');
+        getline(ss, tokenStr, ',');
+        getline(ss, instType, ',');
+        getline(ss, symbol, ',');
+        getline(ss, expiryStr, ',');
+        getline(ss, strikeStr, ',');
+        getline(ss, optType, ',');
+
+        // Check if any required field is missing
+        if (streamIdStr.empty() || expiryStr.empty() || strikeStr.empty()) {
+            cerr << "Error: Missing required field(s) in line: " << line << endl;
+            continue;
+        }
+
+        int streamId = stoi(streamIdStr);
+        int expiry = stoi(expiryStr);
+        int strike = stoi(strikeStr);
+
+        // Set strikeMin and strikeMax to the same value initially
+        int strikeMin = strike;
+        int strikeMax = strike;
+        int strikeGap = 0; // Assuming gap is 0 by default
+
+        Data data = {symbol, expiry, optType, strikeMin, strikeMax, strikeGap};
+
+        // Update or add data in the map
+        updateOrAddData(allStreamInfo, streamId, data);
+    }
+
+    file.close();
+    return allStreamInfo;
+}// Function to generate the report
+void generateReport(const map<int, list<Data>>& allStreamInfo, const string& reportFilename) {
+    ofstream reportFile(reportFilename);
+
+    if (!reportFile.is_open()) {
+        cerr << "Error opening report file: " << reportFilename << endl;
+        return;
+    }
+
+    reportFile << "StreamId,Symbol,Expiry,OptType,StrikeMin,StrikeMax,StrikeGap\n";
+
+    for (const auto& [streamId, dataList] : allStreamInfo) {
+        for (const auto& data : dataList) {
+            // Debug: print the data being written to the report
+
+
+            reportFile << streamId << "," << data.symbol << "," << data.expiry
+                       << "," << data.optType << "," << data.strikeMin
+                       << "," << data.strikeMax << "," << data.strikeGap << "\n";
+        }
+    }
+
+    reportFile.close();
+}
+
+int main() {
+  string filename = "testfile.csv";
+ // Ensure this matches the file name exactly
+    string reportFilename = "report.csv"; // Report file name
+    map<int, list<Data>> allStreamInfo = readFileAndPopulateMap(filename);
+    generateReport(allStreamInfo, reportFilename);
+
+    return 0;
+}
